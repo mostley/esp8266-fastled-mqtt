@@ -7,13 +7,19 @@ void initFastLED(void) {
   FastLED.setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(brightness);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, MILLI_AMPS);
+
   //TODO on 160Hz the LED's are full white! Why?
-  if(power == 1 && currentPatternIndex == patternCount - 1) {
-    fill_solid(leds, NUM_LEDS, solidColor);  
-  }else {
-    fill_solid(leds, NUM_LEDS, CRGB::Black);  
+  if (default_color_on_startup) {
+    fill_solid(leds, NUM_LEDS, default_color);
+    solidColor = default_color;
+  } else {
+    if(power == 1 && currentPatternIndex == patternCount - 1) {
+      fill_solid(leds, NUM_LEDS, solidColor);
+    } else {
+      fill_solid(leds, NUM_LEDS, CRGB::Black);
+    }
   }
-  
+
   FastLED.show();
 }
 
@@ -22,23 +28,31 @@ void loadSettings()
   brightness = EEPROM.read(0);
 
   currentPatternIndex = EEPROM.read(1);
-  if (currentPatternIndex < 0)
+  if (currentPatternIndex < 0) {
     currentPatternIndex = 0;
-  else if (currentPatternIndex >= patternCount)
+  } else if (currentPatternIndex >= patternCount) {
     currentPatternIndex = patternCount - 1;
-
-  byte r = EEPROM.read(2);
-  byte g = EEPROM.read(3);
-  byte b = EEPROM.read(4);
-
-  if (r == 0 && g == 0 && b == 0)
-  {
   }
-  else
-  {
-    solidColor = CRGB(r, g, b);
+
+   if (!default_color_on_startup) {
+    byte r = EEPROM.read(2);
+    byte g = EEPROM.read(3);
+    byte b = EEPROM.read(4);
+
+    if (r == 0 && g == 0 && b == 0) {
+      // nothing
+    } else {
+      solidColor = CRGB(r, g, b);
+    }
+    power = EEPROM.read(5);
+  } else {
+    solidColor = default_color;
+    currentPatternIndex = 10;
+
+    if (brightness == 0) {
+      brightness = 4;
+    }
   }
-  power = EEPROM.read(5);
 }
 
 void logSys() {
@@ -92,6 +106,8 @@ void initWlan() {
       Serial.print(".");
     }
 
+    randomSeed(micros());
+
     Serial.print("Connected! With IP ");
     Serial.print(WiFi.localIP());
     Serial.println(" have FUN :) ");
@@ -99,7 +115,7 @@ void initWlan() {
 }
 
 // Only to test if SSL cert is matching if u have connection problems ...
-void verifytls() {
+/*void verifytls() {
   // Use WiFiClientSecure class to create TLS connection
   Serial.print(" verifytls ... connecting to ");
   Serial.println(mqtt_server);
@@ -114,4 +130,4 @@ void verifytls() {
   } else {
     Serial.println("certificate doesn't match");
   }
-}
+}*/

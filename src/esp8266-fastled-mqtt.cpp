@@ -19,7 +19,10 @@
 
 // TODO Flickering LED's ... https://github.com/FastLED/FastLED/issues/394 or https://github.com/FastLED/FastLED/issues/306
 #define FASTLED_ALLOW_INTERRUPTS 0
+#define FASTLED_INTERRUPT_RETRY_COUNT 3
 #define FASTLED_ESP8266_RAW_PIN_ORDER
+#define FASTLED_ESP8266_DMA
+#define MQTT_VERSION MQTT_VERSION_3_1
 //#define FASTLED_INTERRUPT_RETRY_COUNT 0
 #include "FastLED.h"
 FASTLED_USING_NAMESPACE
@@ -29,7 +32,7 @@ extern "C" {
 }
 
 #include <ESP8266WiFi.h>
-#include <WiFiClientSecure.h> // Only use it with SSL on MQTT Broker
+#include <WiFiClient.h>
 #include <EEPROM.h>
 #include <PubSubClient.h>
 #include "GradientPalettes.h"
@@ -73,11 +76,12 @@ unsigned int autoPlayTimeout = 0;
 uint8_t gHue = 0; // rotating "base color" used by many of the patterns
 
 CRGB solidColor = CRGB::Black;
+CRGB default_color = CRGB::White;
 
 uint8_t power = 1;
 
 // Mqtt Vars
-WiFiClientSecure espClient;
+WiFiClient espClient;
 PubSubClient client(espClient);
 
 
@@ -110,28 +114,132 @@ const uint8_t patternCount = ARRAY_SIZE(patterns);
 #include "Inits.h"
 
 
-void setup(void) {
-  Serial.begin(115200);
-  delay(100);
-  //Serial.setDebugOutput(true);
-  EEPROM.begin(512);
-  loadSettings();
-  initFastLED();
+void setPattern(int value)
+{
+  // don't wrap around at the ends
+  if (value < 0)
+    value = 0;
+  else if (value >= patternCount)
+    value = patternCount - 1;
 
-  logSys();
+  currentPatternIndex = value;
 
-  initWlan();
-
-  // Only to validate certs if u have problems ...
-  // verifytls();
-
-  //Mqtt Init
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
-  autoPlayTimeout = millis() + (autoPlayDurationSeconds * 1000);
+  EEPROM.write(1, currentPatternIndex);
+  EEPROM.commit();
 }
 
-// Format is: command:value
+void setSolidColor(uint8_t r, uint8_t g, uint8_t b)
+{
+  solidColor = CRGB(r, g, b);
+
+  EEPROM.write(2, r);
+  EEPROM.write(3, g);
+  EEPROM.write(4, b);
+
+  setPattern(patternCount - 1);
+}
+
+void setSolidColor(CRGB color)
+{
+  setSolidColor(color.r, color.g, color.b);
+}
+
+String getValue(String data, char separator, int index)
+{
+  int found = 0;
+  int strIndex[] = { 0, -1 };
+  int maxIndex = data.length() - 1;
+
+  for (int i = 0; i <= maxIndex && found <= index; i++) {
+    if (data.charAt(i) == separator || i == maxIndex) {
+      found++;
+      strIndex[0] = strIndex[1] + 1;
+      strIndex[1] = (i == maxIndex) ? i + 1 : i;
+    }
+  }
+  return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
+}
+
+
+// increase or decrease the current pattern number, and wrap around at theends
+void adjustPattern(bool up)
+{
+  if (up)
+    currentPatternIndex++;
+  else
+    currentPatternIndex--;
+
+  // wrap around at the ends
+  if (currentPatternIndex < 0)
+    currentPatternIndex = patternCount - 1;
+  if (currentPatternIndex >= patternCount)
+    currentPatternIndex = 0;
+
+  EEPROM.write(1, currentPatternIndex);
+  EEPROM.commit();
+}
+
+boolean isValidNumber(String str) {
+  // TODO replace with regex check
+  bool result = false;
+  for (byte i = 0; i < str.length(); i++)
+  {
+    if (isDigit(str.charAt(i))) {
+      result = true;
+    } else {
+      result = false;
+      break;
+    }
+  }
+  return result;
+}
+
+// adjust the brightness, and wrap around at the ends
+void adjustBrightness(bool up)
+{
+  if (up)
+    brightnessIndex++;
+  else
+    brightnessIndex--;
+
+  // wrap around at the ends
+  if (brightnessIndex < 0)
+    brightnessIndex = brightnessCount - 1;
+  else if (brightnessIndex >= brightnessCount)
+    brightnessIndex = 0;
+
+  brightness = brightnessMap[brightnessIndex];
+
+  FastLED.setBrightness(brightness);
+
+  EEPROM.write(0, brightness);
+  EEPROM.commit();
+}
+
+void setPower(uint8_t value)
+{
+  power = value == 0 ? 0 : 1;
+  EEPROM.write(5, power);
+  EEPROM.commit();
+
+}
+
+void setBrightness(int value)
+{
+  // don't wrap around at the ends
+  if (value > 255)
+    value = 255;
+  else if (value < 0) value = 0;
+
+  brightness = value;
+
+  FastLED.setBrightness(brightness);
+
+  EEPROM.write(0, brightness);
+  EEPROM.commit();
+}
+
+// Format is: command=value
 // value has to be a number, except rgb commands
 void callback(char* topic, byte* payload, unsigned int length) {
   // handle message arrived
@@ -140,10 +248,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
   tmp[length] = '\0';
   String data(tmp);
 
-
   Serial.printf("Received Data from Topic: %s", data.c_str());
   Serial.println();
-  if ( data.length() > 0) {
+  if (data.length() > 0) {
 
     if (data.startsWith("rgb(")) {
       data.replace("rgb(","");
@@ -154,24 +261,23 @@ void callback(char* topic, byte* payload, unsigned int length) {
       b.replace("hallo","");
       Serial.printf("Received R: %s G: %s B: %s", r.c_str(), g.c_str(), b.c_str());
       Serial.println();
-      
+
       if (r.length() > 0 && g.length() > 0 && b.length() > 0) {
         setSolidColor(r.toInt(), g.toInt(), b.toInt());
       }
-    }else {
-      String command =  getValue(data, ':', 0);
-      String value = getValue(data, ':', 1);
-  
+    } else {
+      String command =  getValue(data, '=', 0);
+      String value = getValue(data, '=', 1);
+
       if (command.length() > 0) {
-  
         if (command.equals("power")) {
           if (isValidNumber(value)) {
             setPower(value.toInt());
           }
         } else if (command.equals("solidcolor")) {
-          String r =  getValue(data, ':', 2);
-          String g =  getValue(data, ':', 4);
-          String b =  getValue(data, ':', 6);
+          String r =  getValue(data, ',', 2);
+          String g =  getValue(data, ',', 4);
+          String b =  getValue(data, ',', 6);
           Serial.printf("Received R: %s G: %s B: %s", r.c_str(), g.c_str(), b.c_str());
           Serial.println();
           if (r.length() > 0 && g.length() > 0 && b.length() > 0) {
@@ -196,13 +302,31 @@ void callback(char* topic, byte* payload, unsigned int length) {
         }
       }
     }
-    
-   
   }
-  Serial.println("Finished Topic Data ...");
 
+  Serial.println("Finished Topic Data ...");
 }
 
+
+void reconnectMqtt() {
+  while (!client.connected()) {
+    Serial.println("Attempting MQTT connection...");
+
+    String clientId = String(mqtt_clientid) + "-";
+    clientId += String(random(0xffff), HEX);
+
+    if (client.connect(clientId.c_str(), mqtt_user, mqtt_password)) {
+      Serial.println("connected");
+      client.subscribe(mqtt_topic);
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
 
 
 void loop(void) {
@@ -217,7 +341,7 @@ void loop(void) {
   if (power == 0) {
     fill_solid(leds, NUM_LEDS, CRGB::Black);
     FastLED.show();
-    delay(15);
+    FastLED.delay(1000 / FRAMES_PER_SECOND);
     return;
   }
 
@@ -251,148 +375,30 @@ void loop(void) {
   FastLED.show();
 
   // insert a delay to keep the framerate modest
-  delay(1000 / FRAMES_PER_SECOND);
+  FastLED.delay(1000 / FRAMES_PER_SECOND);
+  delay(15);
 }
 
+void setup(void) {
+  initFastLED();
 
-void reconnectMqtt() {
-  while (!client.connected()) {
-    Serial.println("Attempting MQTT connection...");
-    if (client.connect(mqtt_clientid, mqtt_user, mqtt_password)) {
-      Serial.println("connected");
-      client.subscribe(mqtt_topic);
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
-    }
-  }
-}
+  Serial.begin(115200);
+  delay(100);
+  //Serial.setDebugOutput(true);
+  EEPROM.begin(512);
+  loadSettings();
 
+  logSys();
 
-void setPower(uint8_t value)
-{
-  power = value == 0 ? 0 : 1;
-  EEPROM.write(5, power);
-  EEPROM.commit();
-  
-}
+  initWlan();
 
-void setSolidColor(CRGB color)
-{
-  setSolidColor(color.r, color.g, color.b);
-}
+  // Only to validate certs if u have problems ...
+  // verifytls();
 
-void setSolidColor(uint8_t r, uint8_t g, uint8_t b)
-{
-  solidColor = CRGB(r, g, b);
+  //Mqtt Init
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+  autoPlayTimeout = millis() + (autoPlayDurationSeconds * 1000);
 
-  EEPROM.write(2, r);
-  EEPROM.write(3, g);
-  EEPROM.write(4, b);
-
-  setPattern(patternCount - 1);
-}
-
-// increase or decrease the current pattern number, and wrap around at theends
-void adjustPattern(bool up)
-{
-  if (up)
-    currentPatternIndex++;
-  else
-    currentPatternIndex--;
-
-  // wrap around at the ends
-  if (currentPatternIndex < 0)
-    currentPatternIndex = patternCount - 1;
-  if (currentPatternIndex >= patternCount)
-    currentPatternIndex = 0;
-
-  EEPROM.write(1, currentPatternIndex);
-  EEPROM.commit();
-}
-
-void setPattern(int value)
-{
-  // don't wrap around at the ends
-  if (value < 0)
-    value = 0;
-  else if (value >= patternCount)
-    value = patternCount - 1;
-
-  currentPatternIndex = value;
-
-  EEPROM.write(1, currentPatternIndex);
-  EEPROM.commit();
-}
-
-// adjust the brightness, and wrap around at the ends
-void adjustBrightness(bool up)
-{
-  if (up)
-    brightnessIndex++;
-  else
-    brightnessIndex--;
-
-  // wrap around at the ends
-  if (brightnessIndex < 0)
-    brightnessIndex = brightnessCount - 1;
-  else if (brightnessIndex >= brightnessCount)
-    brightnessIndex = 0;
-
-  brightness = brightnessMap[brightnessIndex];
-
-  FastLED.setBrightness(brightness);
-
-  EEPROM.write(0, brightness);
-  EEPROM.commit();
-}
-
-void setBrightness(int value)
-{
-  // don't wrap around at the ends
-  if (value > 255)
-    value = 255;
-  else if (value < 0) value = 0;
-
-  brightness = value;
-
-  FastLED.setBrightness(brightness);
-
-  EEPROM.write(0, brightness);
-  EEPROM.commit();
-}
-
-String getValue(String data, char separator, int index)
-{
-  int found = 0;
-  int strIndex[] = { 0, -1 };
-  int maxIndex = data.length() - 1;
-
-  for (int i = 0; i <= maxIndex && found <= index; i++) {
-    if (data.charAt(i) == separator || i == maxIndex) {
-      found++;
-      strIndex[0] = strIndex[1] + 1;
-      strIndex[1] = (i == maxIndex) ? i + 1 : i;
-    }
-  }
-  return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
-}
-
-
-boolean isValidNumber(String str) {
-  // TODO replace with regex check
-  bool result = false;
-  for (byte i = 0; i < str.length(); i++)
-  {
-    if (isDigit(str.charAt(i))) {
-      result = true;
-    } else {
-      result = false;
-      break;
-    }
-  }
-  return result;
+  Serial.println("Setup complete");
 }
