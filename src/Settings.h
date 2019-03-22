@@ -5,16 +5,19 @@ const bool default_color_on_startup = true;
 const char WiFiAPPSK[] = "";
 
 // Wi-Fi network to connect to (if not in AP mode)
-const char* ssid = "";
-const char* password = "";
+const char* ssid = "todo";
+const char* password = "todo";
 
 #define DATA_PIN      4     // for Huzzah: Pins w/o special function:  #4,#5, #12, #13, #14; // #16 does not work :(
 #define LED_TYPE      WS2812
 #define COLOR_ORDER   GRB
-#define NUM_LEDS      103
+#define NUM_LEDS      142
 
-#define MILLI_AMPS         20000     // IMPORTANT: set here the maxmilli-Amps of your power supply 5V 2A = 2000
+#define MILLI_AMPS         10000     // IMPORTANT: set here the maxmilli-Amps of your power supply 5V 2A = 2000
 #define FRAMES_PER_SECOND  20 // here you can control the speed. With the Access Point / Web Server the animations run a bit slower.
+
+// Ignore the first message (because the server could be resending a retained message)
+#define IGNORE_FIRST_MESSAGE true
 
 // MQTT Broker settings
 //const char* mqtt_server = "test.mosquitto.org";
@@ -27,12 +30,12 @@ const char* password = "";
 //const char* mqtt_user = "iyychjbq";
 //const char* mqtt_password = "9ta37xoQXSuM";
 
-const char* mqtt_server = "IP";
+const char* mqtt_server = "192.168.178.49";
 const int mqtt_port = 1883;
 const char* mqtt_user = "mosquitto";
 const char* mqtt_password = "mosquitto";
 
-const char* mqtt_topic = "topic";
+const char* mqtt_topic = "hecht/lights/bar_ceiling";
 const char* mqtt_clientid = "led_driver_03";
 
 // openssl x509 -fingerprint -in  mqttserver.crt - Only if you must verify your certs for connection issues with MQTT

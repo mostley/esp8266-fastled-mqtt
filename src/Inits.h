@@ -10,6 +10,7 @@ void initFastLED(void) {
 
   //TODO on 160Hz the LED's are full white! Why?
   if (default_color_on_startup) {
+    FastLED.setBrightness(255);
     fill_solid(leds, NUM_LEDS, default_color);
     solidColor = default_color;
   } else {
@@ -34,7 +35,13 @@ void loadSettings()
     currentPatternIndex = patternCount - 1;
   }
 
-   if (!default_color_on_startup) {
+  byte dr = EEPROM.read(6);
+  byte dg = EEPROM.read(7);
+  byte db = EEPROM.read(8);
+
+  default_color = CRGB(dr, dg, db);
+
+  if (!default_color_on_startup) {
     byte r = EEPROM.read(2);
     byte g = EEPROM.read(3);
     byte b = EEPROM.read(4);
@@ -49,9 +56,10 @@ void loadSettings()
     solidColor = default_color;
     currentPatternIndex = 10;
 
-    if (brightness == 0) {
-      brightness = 4;
-    }
+    brightness = 255;
+
+    FastLED.setBrightness(brightness);
+    fill_solid(leds, NUM_LEDS, default_color);
   }
 }
 

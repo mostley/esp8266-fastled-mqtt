@@ -23,7 +23,7 @@
 #define FASTLED_ESP8266_RAW_PIN_ORDER
 #define FASTLED_ESP8266_DMA
 #define MQTT_VERSION MQTT_VERSION_3_1
-//#define FASTLED_INTERRUPT_RETRY_COUNT 0
+#define FASTLED_INTERRUPT_RETRY_COUNT 0
 #include "FastLED.h"
 FASTLED_USING_NAMESPACE
 
@@ -79,6 +79,8 @@ CRGB solidColor = CRGB::Black;
 CRGB default_color = CRGB::White;
 
 uint8_t power = 1;
+
+bool isFirstMessage = true;
 
 // Mqtt Vars
 WiFiClient espClient;
@@ -137,6 +139,17 @@ void setSolidColor(uint8_t r, uint8_t g, uint8_t b)
   EEPROM.write(4, b);
 
   setPattern(patternCount - 1);
+}
+
+void setDefaultColor(uint8_t r, uint8_t g, uint8_t b)
+{
+  solidColor = CRGB(r, g, b);
+
+  EEPROM.write(6, r);
+  EEPROM.write(7, g);
+  EEPROM.write(8, b);
+
+  setSolidColor(r, g, b);
 }
 
 void setSolidColor(CRGB color)
@@ -239,6 +252,11 @@ void setBrightness(int value)
   EEPROM.commit();
 }
 
+void setBrightnessPercent(int value)
+{
+  setBrightness(value * 3.6);
+}
+
 // Format is: command=value
 // value has to be a number, except rgb commands
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -247,6 +265,14 @@ void callback(char* topic, byte* payload, unsigned int length) {
   strncpy(tmp, (char*)payload, length);
   tmp[length] = '\0';
   String data(tmp);
+
+  if (isFirstMessage) {
+    isFirstMessage = false;
+    #ifdef IGNORE_FIRST_MESSAGE
+      Serial.printf("Ignoring first message: %s", data.c_str());
+      return;
+    #endif
+  }
 
   Serial.printf("Received Data from Topic: %s", data.c_str());
   Serial.println();
@@ -264,6 +290,18 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
       if (r.length() > 0 && g.length() > 0 && b.length() > 0) {
         setSolidColor(r.toInt(), g.toInt(), b.toInt());
+      }
+    } else if (data.startsWith("default-rgb(")) {
+      data.replace("default-rgb(","");
+      String r =  getValue(data, ',', 0);
+      String g =  getValue(data, ',', 1);
+      String b =  getValue(data, ',', 2);
+      b.replace("hallo","");
+      Serial.printf("Received R: %s G: %s B: %s", r.c_str(), g.c_str(), b.c_str());
+      Serial.println();
+
+      if (r.length() > 0 && g.length() > 0 && b.length() > 0) {
+        setDefaultColor(r.toInt(), g.toInt(), b.toInt());
       }
     } else {
       String command =  getValue(data, '=', 0);
@@ -291,6 +329,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
           if (isValidNumber(value)) {
             setBrightness(value.toInt());
           }
+        } else if (command.equals("brightnessPercent")) {
+          if (isValidNumber(value)) {
+            setBrightnessPercent(value.toInt());
+          }
         } else if (command.equals("brightnessAdjust")) {
           if (isValidNumber(value)) {
             adjustBrightness(value.toInt() == 0 ? false : true);
@@ -308,6 +350,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 
+void playConnectedAnimation() {
+  for (int i=0; i<255; i++) {
+    FastLED.setBrightness(i);
+    FastLED.show();
+  }
+}
+
 void reconnectMqtt() {
   while (!client.connected()) {
     Serial.println("Attempting MQTT connection...");
@@ -318,6 +367,8 @@ void reconnectMqtt() {
     if (client.connect(clientId.c_str(), mqtt_user, mqtt_password)) {
       Serial.println("connected");
       client.subscribe(mqtt_topic);
+
+      playConnectedAnimation();
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -376,11 +427,12 @@ void loop(void) {
 
   // insert a delay to keep the framerate modest
   FastLED.delay(1000 / FRAMES_PER_SECOND);
-  delay(15);
+  //delay(15);
 }
 
 void setup(void) {
   initFastLED();
+  delay(100);
 
   Serial.begin(115200);
   delay(100);
